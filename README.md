@@ -1,6 +1,10 @@
-# fifa-full-screen
+# Matchday
 
-This template should help get you started developing with Vue 3 in Vite.
+A full-screen live scoreboard for the 2026 World Cup. Shows each day's matches — live scores with match clock, upcoming kickoff times, and final results — on a dark layout designed for a TV or wall display.
+
+Scores come from ESPN's public scoreboard API (no API key required) and refresh every 30 seconds. Flag images are served from [flagcdn.com](https://flagcdn.com). The button in the top-right corner toggles full screen, and the cursor hides itself after a few seconds of inactivity.
+
+This is an unofficial fan project, not affiliated with or endorsed by FIFA or ESPN. It collects no personal data and sets no cookies; visitors' browsers request match data directly from ESPN's servers.
 
 ## Recommended IDE Setup
 

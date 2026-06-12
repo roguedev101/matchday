@@ -1,55 +1,155 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import FeaturedMatch from '@/components/FeaturedMatch.vue'
 import MatchCard from '@/components/MatchCard.vue'
-import { formatYmd, useScoreboard } from '@/composables/useScoreboard'
+import { useAppUpdate } from '@/composables/useAppUpdate'
+import { useFeaturedDriver } from '@/composables/useFeaturedDriver'
+import { useNow } from '@/composables/useNow'
+import { STALE_AFTER_MS, useScoreboard } from '@/composables/useScoreboard'
+import { dayLabel, formatYmd, timeLabel, ymdShift } from '@/lib/boardTime'
 
-const { matches, loading, stale, selectedDate } = useScoreboard()
+const { matches, loading, lastGoodAt, selectedDate } = useScoreboard()
+const now = useNow()
 
-const TOURNAMENT_START = new Date(2026, 5, 11)
-const TOURNAMENT_END = new Date(2026, 6, 19)
+const TOURNAMENT_FIRST = '20260611'
+const TOURNAMENT_LAST = '20260719'
 
-const dateOptions = (() => {
-  const options: { value: string; label: string }[] = []
-  const today = formatYmd(new Date())
-  for (
-    const date = new Date(TOURNAMENT_START);
-    date <= TOURNAMENT_END;
-    date.setDate(date.getDate() + 1)
-  ) {
-    const value = formatYmd(date)
-    const label = date.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
-    options.push({ value, label: value === today ? `${label} · Today` : label })
-  }
-  return options
-})()
-
-// Outside the tournament window, fall back to the nearest tournament day.
-const firstDay = dateOptions[0]?.value
-const lastDay = dateOptions[dateOptions.length - 1]?.value
-if (firstDay && selectedDate.value < firstDay) {
-  selectedDate.value = firstDay
-} else if (lastDay && selectedDate.value > lastDay) {
-  selectedDate.value = lastDay
+function clampToTournament(ymd: string): string {
+  return ymd < TOURNAMENT_FIRST ? TOURNAMENT_FIRST : ymd > TOURNAMENT_LAST ? TOURNAMENT_LAST : ymd
 }
 
+// Outside the tournament window, fall back to the nearest tournament day.
+selectedDate.value = clampToTournament(selectedDate.value)
+
+const todayYmd = ref(formatYmd(new Date()))
+
+const dateOptions = computed(() => {
+  const options: { value: string; label: string }[] = []
+  for (let value = TOURNAMENT_FIRST; value <= TOURNAMENT_LAST; value = ymdShift(value, 1)) {
+    const label = dayLabel(value)
+    options.push({ value, label: value === todayYmd.value ? `${label} · Today` : label })
+  }
+  return options
+})
+
 const selectedLabel = computed(
-  () => dateOptions.find((option) => option.value === selectedDate.value)?.label ?? '',
+  () => dateOptions.value.find((option) => option.value === selectedDate.value)?.label ?? '',
 )
 
-// Scale the grid down so every match fits on screen without scrolling.
+// ADR-0001: the Board features matches by itself (rotation, goal seizures,
+// linger); a click is a temporary Override handled by the driver.
+const { featuredMatch, holdActive, select, dismiss } = useFeaturedDriver(matches, now)
+
+const railMatches = computed(() => {
+  const featured = featuredMatch.value
+  return featured ? matches.value.filter((match) => match.id !== featured.id) : matches.value
+})
+
+function onKeydown(event: KeyboardEvent) {
+  noteInput()
+  if (event.key === 'Escape') dismiss()
+}
+
+// Slate rollover and browsed-date decay: the Board comes home to today on its
+// own — but never while someone is interacting, and never while the old slate
+// still has live or lingering football.
+const AUTO_DATE_IDLE_MS = 600_000
+const SLATE_GRACE_MS = 6 * 3_600_000
+
+let lastInputAt = Date.now()
+function noteInput() {
+  lastInputAt = Date.now()
+}
+
+function slateReleased(): boolean {
+  if (!matches.value.length) return true
+  if (matches.value.every((match) => match.state === 'post') && !holdActive.value) return true
+  // Safety valve: a postponed match must not wedge the Board on an old slate.
+  const lastKickoff = Math.max(...matches.value.map((match) => match.kickoff.getTime()))
+  return now.value > lastKickoff + SLATE_GRACE_MS
+}
+
+watch(now, () => {
+  todayYmd.value = formatYmd(new Date(now.value))
+  const target = clampToTournament(todayYmd.value)
+  if (selectedDate.value === target) return
+  if (now.value - lastInputAt < AUTO_DATE_IDLE_MS) return
+  // Browsed-ahead dates snap straight back; catching up forward waits for the
+  // slate to finish (a local-day slate can still be live past midnight).
+  if (selectedDate.value > target || slateReleased()) selectedDate.value = target
+})
+
+// Idle grid gets a pulse: time to the next kickoff (live matches take over).
+const countdown = computed(() => {
+  if (featuredMatch.value || matches.value.some((match) => match.state === 'in')) return ''
+  const kickoffs = matches.value
+    .filter((match) => match.state === 'pre')
+    .map((match) => match.kickoff.getTime())
+  if (!kickoffs.length) return ''
+  const at = Math.min(...kickoffs)
+  const next = matches.value.filter(
+    (match) => match.state === 'pre' && match.kickoff.getTime() === at,
+  )
+  const first = next[0]!
+  const who =
+    next.length === 1
+      ? `${first.home.abbreviation} vs ${first.away.abbreviation}`
+      : `${next.length} matches`
+  const diff = at - now.value
+  if (diff <= 60_000) return `Next kickoff · ${who} · any moment`
+  const hours = Math.floor(diff / 3_600_000)
+  const minutes = Math.floor((diff % 3_600_000) / 60_000)
+  return `Next kickoff · ${who} · in ${hours ? `${hours}h ${minutes}m` : `${minutes}m`}`
+})
+
+// Stale (see CONTEXT.md): state the age of the data, not the app's activity.
+const asOf = computed(() => {
+  if (lastGoodAt.value == null) return ''
+  return now.value - lastGoodAt.value > STALE_AFTER_MS ? timeLabel(lastGoodAt.value) : ''
+})
+
+// Self-update: reload for new deploys, but only at a Safe Moment.
+useAppUpdate(() => !matches.value.some((match) => match.state === 'in') && !holdActive.value)
+
+// Scale the layout to fill the stage: down when it overflows, up on sparse
+// days so a couple of matches still fill a TV.
 const stage = ref<HTMLElement | null>(null)
-const gridEl = ref<HTMLElement | null>(null)
+const layoutEl = ref<HTMLElement | null>(null)
 const scale = ref(1)
 let resizeObserver: ResizeObserver | undefined
 
+// Widest row of actual content. The layout box itself always spans the full
+// stage width, so measure the featured card and the span of the grid's cards
+// instead. offset* values ignore the transform, so this is scale-independent.
+function measureContentWidth(layout: HTMLElement): number {
+  let widest = 0
+  for (const section of Array.from(layout.children) as HTMLElement[]) {
+    if (section.classList.contains('grid')) {
+      let left = Infinity
+      let right = -Infinity
+      for (const card of Array.from(section.children) as HTMLElement[]) {
+        left = Math.min(left, card.offsetLeft)
+        right = Math.max(right, card.offsetLeft + card.offsetWidth)
+      }
+      if (right > left) widest = Math.max(widest, right - left)
+    } else {
+      widest = Math.max(widest, section.offsetWidth)
+    }
+  }
+  return widest
+}
+
 function updateScale() {
   const stageEl = stage.value
-  const grid = gridEl.value
-  if (!stageEl || !grid || !grid.offsetHeight) {
+  const layout = layoutEl.value
+  if (!stageEl || !layout || !layout.offsetHeight) {
     scale.value = 1
     return
   }
-  scale.value = Math.min(1, stageEl.clientHeight / grid.offsetHeight)
+  const byHeight = stageEl.clientHeight / layout.offsetHeight
+  const contentWidth = measureContentWidth(layout)
+  const byWidth = contentWidth > 0 ? stageEl.clientWidth / contentWidth : byHeight
+  scale.value = Math.min(byWidth, byHeight)
 }
 
 const isFullscreen = ref(false)
@@ -70,6 +170,7 @@ const cursorIdle = ref(false)
 let idleTimer: ReturnType<typeof setTimeout> | undefined
 
 function onPointerMove() {
+  noteInput()
   cursorIdle.value = false
   clearTimeout(idleTimer)
   idleTimer = setTimeout(() => {
@@ -80,17 +181,18 @@ function onPointerMove() {
 onMounted(() => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('keydown', onKeydown)
   onPointerMove()
 
   if (typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(updateScale)
   }
   watch(
-    [stage, gridEl],
+    [stage, layoutEl],
     () => {
       resizeObserver?.disconnect()
       if (stage.value) resizeObserver?.observe(stage.value)
-      if (gridEl.value) resizeObserver?.observe(gridEl.value)
+      if (layoutEl.value) resizeObserver?.observe(layoutEl.value)
       updateScale()
     },
     { immediate: true, flush: 'post' },
@@ -100,6 +202,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('pointermove', onPointerMove)
+  window.removeEventListener('keydown', onKeydown)
   clearTimeout(idleTimer)
   resizeObserver?.disconnect()
 })
@@ -113,23 +216,44 @@ onBeforeUnmount(() => {
       <div class="date-row">
         <div class="select-wrap">
           <span class="select-sizer" aria-hidden="true">{{ selectedLabel }}</span>
-          <select v-model="selectedDate" class="date-select" aria-label="Match date">
+          <select
+            v-model="selectedDate"
+            class="date-select"
+            aria-label="Match date"
+            @change="noteInput"
+          >
             <option v-for="option in dateOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>
         </div>
-        <span v-if="stale" class="stale">reconnecting…</span>
+        <span v-if="asOf" class="stale">as of {{ asOf }}</span>
       </div>
     </header>
 
     <section v-if="matches.length" ref="stage" class="stage">
-      <div ref="gridEl" class="grid" :style="{ transform: `scale(${scale})` }">
-        <MatchCard v-for="match in matches" :key="match.id" :match="match" />
+      <div ref="layoutEl" class="layout" :style="{ transform: `scale(${scale})` }">
+        <p v-if="countdown" class="countdown">{{ countdown }}</p>
+        <FeaturedMatch
+          v-if="featuredMatch"
+          :key="featuredMatch.id"
+          :match="featuredMatch"
+          @dismiss="dismiss"
+        />
+        <div v-if="railMatches.length" class="grid" :class="{ rail: featuredMatch }">
+          <MatchCard
+            v-for="match in railMatches"
+            :key="match.id"
+            :match="match"
+            :compact="Boolean(featuredMatch)"
+            @select="select(match.id)"
+          />
+        </div>
       </div>
     </section>
     <p v-else-if="loading" class="message">Loading matches…</p>
-    <p v-else class="message">No matches today</p>
+    <p v-else-if="lastGoodAt" class="message">No matches today</p>
+    <p v-else class="message">Waiting for scores…</p>
 
     <footer class="footer">
       Matchday is an unofficial fan project — not affiliated with or endorsed by FIFA or ESPN.
@@ -166,7 +290,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  padding: clamp(1rem, 3vh, 2.5rem) clamp(1rem, 3vw, 3rem);
+  padding: clamp(0.75rem, 2vh, 1.5rem) clamp(1rem, 3vw, 3rem);
 }
 
 .board.cursor-idle,
@@ -176,12 +300,35 @@ onBeforeUnmount(() => {
 
 .header {
   text-align: center;
-  margin-bottom: clamp(1rem, 3vh, 2.5rem);
+  margin-bottom: clamp(0.75rem, 2vh, 1.5rem);
+}
+
+/* One row of chrome on wide screens; stacked and centered on narrow ones. */
+@media (min-width: 64rem) {
+  .header {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+  }
+
+  .header h1 {
+    justify-self: start;
+  }
+
+  .header .tagline {
+    margin: 0;
+    justify-self: center;
+  }
+
+  .header .date-row {
+    margin: 0;
+    justify-self: end;
+  }
 }
 
 h1 {
   margin: 0;
-  font-size: clamp(1.5rem, 3vw, 2.6rem);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -197,6 +344,23 @@ h1 {
   letter-spacing: 0.3em;
   text-transform: uppercase;
   color: #5b6b84;
+}
+
+/* Secondary chrome fades with the cursor so an idle TV shows only scores. */
+.tagline,
+.date-row,
+.footer {
+  transition: opacity 0.6s;
+}
+
+.cursor-idle .tagline,
+.cursor-idle .date-row,
+.cursor-idle .footer {
+  opacity: 0;
+}
+
+.cursor-idle .date-row {
+  pointer-events: none;
 }
 
 .date-row {
@@ -273,19 +437,45 @@ h1 {
   overflow: hidden;
 }
 
+.layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(1rem, 2.5vh, 2rem);
+  width: 100%;
+  max-width: 120rem;
+  transform-origin: center;
+  transition: transform 0.4s ease;
+}
+
 .grid {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: clamp(1rem, 2vw, 1.75rem);
   width: 100%;
-  max-width: 120rem;
-  transform-origin: center;
 }
 
 .grid > * {
   flex: 0 1 clamp(24rem, 30vw, 44rem);
   max-width: 100%;
+}
+
+.grid.rail {
+  gap: clamp(0.5rem, 1vw, 0.9rem);
+}
+
+.grid.rail > * {
+  flex: 0 1 auto;
+}
+
+.countdown {
+  margin: 0;
+  font-size: clamp(0.9rem, 1.3vw, 1.2rem);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8c9bb1;
+  font-variant-numeric: tabular-nums;
 }
 
 .message {
@@ -309,7 +499,7 @@ h1 {
 
 .fullscreen-btn {
   position: fixed;
-  top: clamp(0.75rem, 2vh, 1.5rem);
+  bottom: clamp(0.75rem, 2vh, 1.5rem);
   right: clamp(0.75rem, 2vw, 1.5rem);
   display: grid;
   place-items: center;
@@ -333,5 +523,11 @@ h1 {
 .cursor-idle .fullscreen-btn {
   opacity: 0;
   pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layout {
+    transition: none;
+  }
 }
 </style>

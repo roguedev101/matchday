@@ -11,6 +11,9 @@ body {
 
 html {
   background-color: #05070d;
+  /* Scale rem with the viewport above 1920px (16px / 1920px = 0.833vw) so the
+     layout fills large TVs; below that the browser default (16px) wins. */
+  font-size: max(1em, 0.833vw);
 }
 
 body {

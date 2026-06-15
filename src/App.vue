@@ -6,6 +6,7 @@ import { useAppUpdate } from '@/composables/useAppUpdate'
 import { useFeaturedDriver } from '@/composables/useFeaturedDriver'
 import { useNow } from '@/composables/useNow'
 import { STALE_AFTER_MS, useScoreboard } from '@/composables/useScoreboard'
+import { useWakeLock } from '@/composables/useWakeLock'
 import { dayLabel, formatYmd, timeLabel, ymdShift } from '@/lib/boardTime'
 
 const { matches, loading, lastGoodAt, selectedDate } = useScoreboard()
@@ -38,16 +39,17 @@ const selectedLabel = computed(
 
 // ADR-0001: the Board features matches by itself (rotation, goal seizures,
 // linger); a click is a temporary Override handled by the driver.
-const { featuredMatch, holdActive, select, dismiss } = useFeaturedDriver(matches, now)
+const { featuredMatch, holdActive, select } = useFeaturedDriver(matches, now)
+
+useWakeLock()
 
 const railMatches = computed(() => {
   const featured = featuredMatch.value
   return featured ? matches.value.filter((match) => match.id !== featured.id) : matches.value
 })
 
-function onKeydown(event: KeyboardEvent) {
+function onKeydown() {
   noteInput()
-  if (event.key === 'Escape') dismiss()
 }
 
 // Slate rollover and browsed-date decay: the Board comes home to today on its
@@ -152,6 +154,22 @@ function updateScale() {
   scale.value = Math.min(byWidth, byHeight)
 }
 
+const helpDialog = ref<HTMLDialogElement | null>(null)
+
+function openHelp() {
+  noteInput()
+  helpDialog.value?.showModal()
+}
+
+function closeHelp() {
+  helpDialog.value?.close()
+}
+
+// Native <dialog> backdrop clicks land on the dialog element itself.
+function onHelpClick(event: MouseEvent) {
+  if (event.target === helpDialog.value) closeHelp()
+}
+
 const isFullscreen = ref(false)
 
 function toggleFullscreen() {
@@ -234,12 +252,7 @@ onBeforeUnmount(() => {
     <section v-if="matches.length" ref="stage" class="stage">
       <div ref="layoutEl" class="layout" :style="{ transform: `scale(${scale})` }">
         <p v-if="countdown" class="countdown">{{ countdown }}</p>
-        <FeaturedMatch
-          v-if="featuredMatch"
-          :key="featuredMatch.id"
-          :match="featuredMatch"
-          @dismiss="dismiss"
-        />
+        <FeaturedMatch v-if="featuredMatch" :key="featuredMatch.id" :match="featuredMatch" />
         <div v-if="railMatches.length" class="grid" :class="{ rail: featuredMatch }">
           <MatchCard
             v-for="match in railMatches"
@@ -260,27 +273,78 @@ onBeforeUnmount(() => {
       Match data is requested by your browser directly from ESPN.
     </footer>
 
-    <button
-      class="fullscreen-btn"
-      type="button"
-      :title="isFullscreen ? 'Exit full screen' : 'Full screen'"
-      @click="toggleFullscreen"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        width="22"
-        height="22"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
+    <div class="controls">
+      <button
+        class="chrome-btn"
+        type="button"
+        title="Keep the screen awake"
+        aria-haspopup="dialog"
+        @click="openHelp"
       >
-        <path v-if="isFullscreen" d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" />
-        <path v-else d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" />
-      </svg>
-    </button>
+        <svg
+          viewBox="0 0 24 24"
+          width="22"
+          height="22"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" />
+          <path d="M12 17h.01" />
+        </svg>
+      </button>
+
+      <button
+        class="chrome-btn"
+        type="button"
+        :title="isFullscreen ? 'Exit full screen' : 'Full screen'"
+        @click="toggleFullscreen"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          width="22"
+          height="22"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path v-if="isFullscreen" d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" />
+          <path v-else d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" />
+        </svg>
+      </button>
+    </div>
+
+    <dialog ref="helpDialog" class="help" @click="onHelpClick">
+      <div class="help-body">
+        <h2>Keeping the screen awake</h2>
+        <p class="help-lead">
+          The board already requests a screen wake lock, so most Chromium browsers (Chrome, Edge)
+          keep the display on while this page is open and visible.
+        </p>
+        <ul>
+          <li>Tap the <strong>⤢ full-screen</strong> button for the cleanest wall display.</li>
+          <li>
+            On a TV or monitor, also turn off the device's own
+            <strong>screensaver / sleep / energy-saving</strong> timer — the browser can't override
+            that.
+          </li>
+          <li>
+            Keep this tab in the foreground. Browsers drop the wake lock when the tab is hidden; the
+            board re-acquires it automatically when you return.
+          </li>
+          <li>Keep laptops plugged in — some browsers release the lock on battery saver.</li>
+          <li>Safari and most smart-TV browsers ignore wake lock; rely on the device settings.</li>
+        </ul>
+      </div>
+      <button class="help-close" type="button" title="Close" @click="closeHelp">Got it</button>
+    </dialog>
   </main>
 </template>
 
@@ -497,10 +561,16 @@ h1 {
   color: #44516a;
 }
 
-.fullscreen-btn {
+.controls {
   position: fixed;
   bottom: clamp(0.75rem, 2vh, 1.5rem);
   right: clamp(0.75rem, 2vw, 1.5rem);
+  display: flex;
+  gap: 0.5rem;
+  transition: opacity 0.3s;
+}
+
+.chrome-btn {
   display: grid;
   place-items: center;
   padding: 0.6rem;
@@ -515,14 +585,73 @@ h1 {
     color 0.2s;
 }
 
-.fullscreen-btn:hover {
+.chrome-btn:hover {
   opacity: 1;
   color: #f1f5f9;
 }
 
-.cursor-idle .fullscreen-btn {
+.cursor-idle .controls {
   opacity: 0;
   pointer-events: none;
+}
+
+.help {
+  margin: auto;
+  max-width: min(92vw, 34rem);
+  padding: clamp(1.5rem, 3vw, 2.25rem);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1.25rem;
+  background: #11161f;
+  color: #c4cede;
+}
+
+.help::backdrop {
+  background: rgba(4, 7, 12, 0.7);
+  backdrop-filter: blur(2px);
+}
+
+.help h2 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.25rem, 2.4vw, 1.6rem);
+  color: #f1f5f9;
+}
+
+.help-lead {
+  margin: 0 0 1rem;
+  line-height: 1.55;
+  color: #8c9bb1;
+}
+
+.help ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  line-height: 1.5;
+}
+
+.help strong {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.help-close {
+  margin-top: 1.5rem;
+  width: 100%;
+  padding: 0.7rem;
+  border-radius: 0.75rem;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  color: #4ade80;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.help-close:hover {
+  background: rgba(74, 222, 128, 0.2);
 }
 
 @media (prefers-reduced-motion: reduce) {

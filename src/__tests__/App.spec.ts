@@ -180,7 +180,7 @@ describe('App', () => {
     wrapper.unmount()
   })
 
-  it('treats a click as an Override and returns to auto on dismiss', async () => {
+  it('treats a click as an Override', async () => {
     const wrapper = mount(App)
     await flushPromises()
 
@@ -189,10 +189,6 @@ describe('App', () => {
     const usaCard = railCards.find((card) => card.text().includes('USA'))!
     await usaCard.trigger('click')
     expect(wrapper.find('.featured').text()).toContain('United States')
-
-    // Dismiss: the appliance resumes featuring live football.
-    await wrapper.find('.close').trigger('click')
-    expect(wrapper.find('.featured').text()).toContain('Mexico')
 
     wrapper.unmount()
   })

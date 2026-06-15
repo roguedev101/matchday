@@ -132,12 +132,4 @@ describe('useFeaturedDriver', () => {
     await nextTick()
     expect(driver.featuredId.value).toBe('b')
   })
-
-  it('moves on when dismissed', () => {
-    const { driver } = setup([match('a', 'in'), match('b', 'in')])
-    expect(driver.featuredId.value).toBe('a')
-
-    driver.dismiss()
-    expect(driver.featuredId.value).toBe('b')
-  })
 })

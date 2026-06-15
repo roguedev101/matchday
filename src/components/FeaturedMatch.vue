@@ -8,7 +8,6 @@ import { liveClock } from '@/lib/matchClock'
 import type { Match } from '@/composables/useScoreboard'
 
 const props = defineProps<{ match: Match }>()
-const emit = defineEmits<{ dismiss: [] }>()
 
 const homeDimmed = computed(() => props.match.state === 'post' && props.match.away.winner)
 const awayDimmed = computed(() => props.match.state === 'post' && props.match.home.winner)
@@ -57,22 +56,7 @@ const broadcastText = computed(() =>
 </script>
 
 <template>
-  <article class="featured" :class="`is-${match.state}`" @click="emit('dismiss')">
-    <button class="close" type="button" title="Show all matches" @click.stop="emit('dismiss')">
-      <svg
-        viewBox="0 0 24 24"
-        width="20"
-        height="20"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        aria-hidden="true"
-      >
-        <path d="M6 6l12 12M18 6 6 18" />
-      </svg>
-    </button>
-
+  <article class="featured" :class="`is-${match.state}`">
     <div class="status">
       <span v-if="match.state === 'in'" class="live-dot" aria-hidden="true"></span>
       <span class="status-text">{{ status }}</span>
@@ -188,7 +172,6 @@ const broadcastText = computed(() =>
   border-radius: 2rem;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  cursor: pointer;
   animation: featured-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -204,33 +187,6 @@ const broadcastText = computed(() =>
     opacity: 0;
     transform: translateY(14px) scale(0.97);
   }
-}
-
-.close {
-  position: absolute;
-  top: clamp(0.75rem, 1.5vh, 1.25rem);
-  right: clamp(0.75rem, 1.5vw, 1.25rem);
-  display: grid;
-  place-items: center;
-  padding: 0.45rem;
-  border-radius: 0.6rem;
-  background: transparent;
-  border: 1px solid transparent;
-  color: #5b6b84;
-  cursor: pointer;
-  transition:
-    color 0.2s,
-    border-color 0.2s;
-}
-
-.close:hover {
-  color: #f1f5f9;
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-.close:focus-visible {
-  outline: 2px solid #4ade80;
-  outline-offset: 2px;
 }
 
 .status {

@@ -120,22 +120,11 @@ export function useFeaturedDriver(matches: Ref<Match[]>, now: Ref<number>) {
     update()
   }
 
-  function dismiss() {
-    manual = null
-    pin = null
-    // Visibly move on: advance past the dismissed match before resuming auto.
-    const live = matches.value.filter((match) => match.state === 'in')
-    const index = live.findIndex((match) => match.id === featuredId.value)
-    featuredId.value = live.length ? live[(index + 1) % live.length]!.id : null
-    holdActive.value = false
-    rotateAt = now.value + ROTATE_MS
-  }
-
   watch([matches, now], update, { immediate: true })
 
   const featuredMatch = computed(
     () => matches.value.find((match) => match.id === featuredId.value) ?? null,
   )
 
-  return { featuredId, featuredMatch, holdActive, select, dismiss }
+  return { featuredId, featuredMatch, holdActive, select }
 }
